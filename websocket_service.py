@@ -7,7 +7,9 @@ from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv(dotenv_path='.env.public')
+dotenv_path = '.env.public'
+load_dotenv(dotenv_path=dotenv_path)
+
 # Azure Blob Storage configuration
 SERVER_ACCOUNT_URL = os.getenv("SERVER_ACCOUNT_URL")
 SERVER_CONTAINER_NAME = os.getenv("SERVER_CONTAINER_NAME")
@@ -26,9 +28,9 @@ except Exception as e:
     raise
     
 class WebSocketClient:
-    def __init__(self, client_id, server_host="localhost"):
+    def __init__(self, client_id, server_host="localhost", port=8000):
         self.client_id = client_id
-        self.server_url = f"ws://{server_host}:443/ws/{client_id}"
+        self.server_url = f"ws://{server_host}:{port}/ws/{client_id}"
         self.websocket = None
         self.connected = False
         self.reconnect_delay = 5  # Initial reconnect delay in seconds
@@ -46,7 +48,6 @@ class WebSocketClient:
                 logging.StreamHandler()
             ]
         )
-        print(f"{log_dir}/client_websocket.log")
 
     def get_last_downloaded_version(self):
         """Retrieve the last downloaded model version from local storage."""
@@ -56,9 +57,6 @@ class WebSocketClient:
                 version = f.read().strip()
                 match = re.search(r'g(\d+)\.keras', version)
                 if match:
-                    print("-----------------------------------------")
-                    print(int(match.group(1)))
-                    print("-----------------------------------------")
                     return int(match.group(1))
         return 0
 
@@ -102,9 +100,6 @@ class WebSocketClient:
                     match = re.search(r'g(\d+)\.keras', server_version)
                     if match:
                         server_version_num = int(match.group(1))
-                        print("-----------------------------------------")
-                        print(server_version_num)
-                        print("-----------------------------------------")
                         logging.info(f"Server version: {server_version_num}, Client version: {self.last_downloaded_version}")
                         if server_version_num > self.last_downloaded_version:
                             logging.info(f"Updating to latest model: {server_version}")
@@ -190,10 +185,11 @@ class WebSocketClient:
 async def run_websocket_service():
     """Independent WebSocket service."""
     host = os.getenv("SERVER_HOST", "localhost")
+    port = 8000
 
     while True:
         try:
-            ws_client = WebSocketClient(CLIENT_ID, host)
+            ws_client = WebSocketClient(CLIENT_ID, host, port)
             await ws_client.connect()
         except Exception as e:
             logging.error(f"WebSocket service error: {e}")
