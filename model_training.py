@@ -1,4 +1,9 @@
 import tensorflow as tf
+import warnings
+from tensorflow_privacy.privacy.optimizers import dp_optimizer_keras
+warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
+
+import tensorflow_privacy as tfp
 tf.get_logger().setLevel('ERROR')
 
 import os
@@ -6,6 +11,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import logging
 import re
+import glob
 import numpy as np
 from datetime import datetime
 from azure.storage.blob import BlobServiceClient
@@ -52,9 +58,107 @@ def load_preprocessed_data(data_path):
 
     return loaded_data
 
-# Train the model
-def train_model(model, data, epochs=1, batch_size=32):
-    """Train the model on the preprocessed data."""
+import time
+import psutil
+
+import pandas as pd
+import os
+
+def store_results_in_csv(history, csv_file='training_results.csv'):
+    """
+    Function to store training results (loss, metrics, and learning rate) into a CSV file.
+    Appends results with an incremental index.
+
+    Parameters:
+    - history: The history object from model training (it contains loss and metrics).
+    - csv_file: The CSV file to store the results.
+    """
+    
+    # Get the current index by counting the existing rows in the CSV
+    if os.path.isfile(csv_file):
+        existing_data = pd.read_csv(csv_file)
+        next_index = len(existing_data) + 1
+    else:
+        next_index = 1
+
+    # Extracting the necessary metrics from the history
+    results = {
+        'index': next_index,
+        'loss': history.history['loss'][-1],  # Last epoch loss
+        'throttle_loss': history.history['throttle_loss'][-1],
+        'steering_loss': history.history['steering_loss'][-1],
+        'brake_loss': history.history['brake_loss'][-1],
+        'throttle_mean_absolute_error': history.history['throttle_mean_absolute_error'][-1],
+        'steering_mean_absolute_error': history.history['steering_mean_absolute_error'][-1],
+        'brake_mean_absolute_error': history.history['brake_mean_absolute_error'][-1],
+    }
+
+    # Convert to DataFrame
+    results_df = pd.DataFrame([results])
+
+    # Append to CSV, create file with headers if it doesn't exist
+    results_df.to_csv(csv_file, mode='a', header=not os.path.isfile(csv_file), index=False)
+
+    print(f"Results saved to {csv_file}")
+
+# def train_model(model, data, epochs=1, batch_size=32, learning_rate=0.01, noise_multiplier=1.0, l2_norm_clip=1.0, num_microbatches=1):
+#     """Train the model with differential privacy applied to the optimizer."""
+#     # Start time tracking
+#     start_time = time.time()
+
+#     # Initial resource usage
+#     process = psutil.Process()
+#     initial_memory = process.memory_info().rss / 1024 / 1024  # in MB
+
+#     rgb_data = data["rgb"]
+#     segmentation_data = data["segmentation"]
+#     hlc_data = data["hlc"]
+#     light_data = data["light"]
+#     measurements_data = data["measurements"]
+#     controls_data = data["controls"]  # Target variable
+
+#     # Start model training
+#     print("Training started...")
+#      # Apply DP optimizer
+#     optimizer = dp_optimizer_keras.DPKerasSGDOptimizer(
+#     l2_norm_clip=l2_norm_clip,
+#     noise_multiplier=noise_multiplier,
+#     num_microbatches=num_microbatches,
+#     learning_rate=learning_rate)
+
+#     model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+#     history = model.fit(
+#         [rgb_data, segmentation_data, hlc_data, light_data, measurements_data],  # Inputs
+#         controls_data,  # Target (throttle, steer, brake)
+#         epochs=epochs,
+#         batch_size=batch_size,
+#         verbose=1
+#     )
+#     store_results_in_csv(history)
+
+#     # End time tracking
+#     end_time = time.time()
+#     training_time = end_time - start_time
+
+#     # Resource usage after training
+#     final_memory = process.memory_info().rss / 1024 / 1024  # in MB
+
+#     # Print resource usage statistics
+#     print(f"Training time: {training_time:.2f} seconds")
+#     print(f"Initial Memory usage: {initial_memory:.2f} MB")
+#     print(f"Final Memory usage: {final_memory:.2f} MB")
+
+#     return history
+
+def train_model(model, data, epochs, batch_size, learning_rate, noise_multiplier, l2_norm_clip, num_microbatches):
+    """Train the model with differential privacy applied to the optimizer."""
+    # Start time tracking
+    start_time = time.time()
+
+    # Initial resource usage
+    process = psutil.Process()
+    initial_memory = process.memory_info().rss / 1024 / 1024  # in MB
+
     rgb_data = data["rgb"]
     segmentation_data = data["segmentation"]
     hlc_data = data["hlc"]
@@ -62,13 +166,83 @@ def train_model(model, data, epochs=1, batch_size=32):
     measurements_data = data["measurements"]
     controls_data = data["controls"]  # Target variable
 
-    model.fit(
-        [rgb_data, segmentation_data, hlc_data, light_data, measurements_data],  # Inputs
-        controls_data,  # Target (throttle, steer, brake)
+    # Start model training
+    print("Training started...")
+
+    # Warmup and decay schedule
+    initial_lr = learning_rate
+    warmup_epochs = 5
+    
+    def custom_schedule(epoch):
+        if epoch < warmup_epochs:
+            return initial_lr * ((epoch + 1) / warmup_epochs)
+        else:
+            decay_rate = 0.95
+            return initial_lr * decay_rate ** (epoch - warmup_epochs)
+
+    callbacks = [
+        tf.keras.callbacks.LearningRateScheduler(custom_schedule),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor='val_loss',
+            factor=0.3,
+            patience=3,
+            min_lr=1e-6,
+            verbose=2
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            'best_model.h5',
+            monitor='val_loss',
+            save_best_only=True,
+            save_weights_only=True,
+            mode='min',
+            verbose=2
+        ),
+        tf.keras.callbacks.EarlyStopping(
+            monitor='val_loss',
+            patience=10,
+            restore_best_weights=True
+        )
+    ]
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=initial_lr)
+    # Apply DP optimizer
+    # optimizer = dp_optimizer_keras.DPKerasSGDOptimizer(
+    # l2_norm_clip=l2_norm_clip,
+    # noise_multiplier=noise_multiplier,
+    # num_microbatches=num_microbatches,
+    # learning_rate=initial_lr)
+    
+    model.compile(
+        optimizer=optimizer,
+        loss=['mean_squared_error'] * 3,
+        metrics=['mean_absolute_error']
+    )
+
+    history = model.fit(
+        [rgb_data, segmentation_data, hlc_data, light_data, measurements_data],
+        controls_data,
         epochs=epochs,
         batch_size=batch_size,
-        verbose=1
+        validation_split=0.2,
+        verbose=1,
+        callbacks=callbacks
     )
+    store_results_in_csv(history)
+
+    # End time tracking
+    end_time = time.time()
+    training_time = end_time - start_time
+
+    # Resource usage after training
+    final_memory = process.memory_info().rss / 1024 / 1024  # in MB
+
+    # Print resource usage statistics
+    print(f"Training time: {training_time:.2f} seconds")
+    print(f"Initial Memory usage: {initial_memory:.2f} MB")
+    print(f"Final Memory usage: {final_memory:.2f} MB")
+
+    return history
+
 
 def get_versioned_filename(client_id, save_dir, extension="keras"):
     """
@@ -118,7 +292,7 @@ def save_model(client_id, model, save_dir):
     """
     os.makedirs(save_dir, exist_ok=True)
 
-    model_path, next_version, timestamp = get_versioned_filename(client_id, save_dir)
+    model_path = os.path.join(save_dir, f"weights.keras")
     try:
         model.save(model_path)
         logging.info(f"Model for {client_id} saved at {model_path}")
@@ -127,7 +301,7 @@ def save_model(client_id, model, save_dir):
     return model_path
 
 
-def upload_file(file_path, container_name):
+def upload_file(file_path, container_name, metadata):
     """
     Upload a file to Azure Blob Storage with versioned naming.
 
@@ -140,12 +314,38 @@ def upload_file(file_path, container_name):
     try:
         blob_client = BLOB_SERVICE_CLIENT.get_blob_client(container=container_name, blob=filename)
         with open(file_path, "rb") as file:
-            blob_client.upload_blob(file.read(), overwrite=True)
+            blob_client.upload_blob(file.read(), overwrite=True, metadata=metadata)
         logging.info(f"File {filename} uploaded successfully to Azure Blob Storage.")
         print(f"File {filename} uploaded successfully to Azure Blob Storage.")
     except Exception as e:
         logging.error(f"Error uploading file {filename}: {e}")
         print(f"Error uploading file {filename}: {e}")
+
+def load_model_weights(model, directory_path):
+    """
+    Load the first .keras weights file found in the specified directory
+    
+    Args:
+        model: Keras model instance
+        directory_path: Path to directory containing weights file
+        
+    Returns:
+        bool: True if weights loaded successfully, False otherwise
+    """
+    try:
+        # Find all .keras files in directory
+        keras_files = glob.glob(os.path.join(directory_path, "weights.keras"))
+        
+        if not keras_files:
+            logging.error(f"No .keras files found in {directory_path}")
+            return False
+
+        logging.info(f"Successfully loaded weights from {keras_files[0]}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error loading weights: {str(e)}")
+        return False
 
 
 # Updated Main Function to Reflect Unified Versioning
@@ -156,6 +356,10 @@ def main(client_id, data_path, save_dir, build_model):
     try:
         # Load preprocessed data
         data = load_preprocessed_data(data_path)
+        # Count total number of examples
+        controls_data = data["controls"] # Target
+        num_examples = controls_data.shape[0]
+        print(num_examples)
         logging.info("Data loaded successfully.")
         print("Data loaded successfully")
 
@@ -170,14 +374,45 @@ def main(client_id, data_path, save_dir, build_model):
 
         # Build and train the model
         model = build_model(input_shapes)
+        success = load_model_weights(model, save_dir)
+        if not success:
+            logging.info("Failed to load weights. Training from scratch.")
+            print("Failed to load weights. Training from scratch.")
+        else:
+            logging.info("Weights loaded successfully.")
+            print("Weights loaded successfully.")
         logging.info("Model created successfully.")
         print("model created successfully")
 
-        train_model(model, data)
+        epochs = 30
+        batch_size = 32
+        learning_rate = 0.001
+        noise_multiplier = 0.1  # Increase noise multiplier to ensure privacy
+        l2_norm_clip = 0.1  # Control how much noise is added
+        num_microbatches = 1 # Split the batch into smaller groups
+        print(f"noise_multiplier: {noise_multiplier}, l2_norm_clip: {l2_norm_clip}")
+        history = train_model(model, data, epochs=epochs, batch_size=batch_size, 
+                    learning_rate=learning_rate, 
+                    noise_multiplier=noise_multiplier, 
+                    l2_norm_clip=l2_norm_clip, num_microbatches=num_microbatches)
+        
+        try:
+            final_loss = history.history['loss'][-1]
+        except Exception as e:
+            print(f"Error getting final loss: {e}")
+            final_loss = 0
+
+
+        # Prepare metadata
+        metadata = {
+            'num_examples': str(num_examples),
+            'loss': str(final_loss),
+        }
 
         # Save and upload weights
+        model.save_weights(os.path.join(save_dir, "weights.keras"))
         weights_path, timestamp = save_weights(client_id, model, save_dir)
-        upload_file(weights_path, CLIENT_CONTAINER_NAME)
+        upload_file(weights_path, CLIENT_CONTAINER_NAME, metadata)
 
         # Save and upload the full model
         # model_path = save_model(client_id, model, save_dir)

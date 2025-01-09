@@ -30,7 +30,7 @@ def preprocess_data(raw_data_path, preprocessed_data_path, image_size=(128, 128)
     except Exception as e:
         logging.error(f"Error in preprocessing: {e}")
 
-def train(client_id, data_path, save_dir, epochs=1, batch_size=32):
+def train(client_id, data_path, save_dir):
     """Train the model for the client."""
     try:
         train_main(client_id, data_path, save_dir, build_model)
@@ -60,7 +60,7 @@ async def run_data_service(client_id):
                 logging.info(f"Found new data: {hdf5_file}")
                 print(f"Found new data: {hdf5_file}")
                 try:
-                    preprocess_data(hdf5_file, preprocessed_data_path)
+                    # preprocess_data(hdf5_file, preprocessed_data_path)
                     train(client_id, preprocessed_data_path, save_dir)
                     # os.remove(hdf5_file)
                     logging.info("Processed file deleted, waiting 4 hours")

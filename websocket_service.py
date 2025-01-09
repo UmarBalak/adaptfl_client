@@ -3,12 +3,13 @@ import os
 import asyncio
 import websockets
 import re
+import aiofiles
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 
 # Load environment variables
-dotenv_path = '.env.public'
-load_dotenv(dotenv_path=dotenv_path)
+env_file = ".env.public"  # Change this to .env or .env.2 as needed
+load_dotenv(env_file)
 
 # Azure Blob Storage configuration
 SERVER_ACCOUNT_URL = os.getenv("SERVER_ACCOUNT_URL")
@@ -17,7 +18,7 @@ CLIENT_ID = os.getenv("CLIENT_ID")
 script_directory = os.path.dirname(os.path.realpath(__file__))
 LOCAL_DOWNLOAD_DIR = os.path.join(script_directory, "global_model")
 
-if not SERVER_ACCOUNT_URL:
+if not SERVER_ACCOUNT_URL or not SERVER_CONTAINER_NAME or not CLIENT_ID:
     logging.error("SAS url environment variable is missing.")
     raise ValueError("Missing required environment variable: SAS url")
 
@@ -28,9 +29,10 @@ except Exception as e:
     raise
     
 class WebSocketClient:
-    def __init__(self, client_id, server_host="localhost", port=8000):
+    def __init__(self, client_id, server_host="adaptfls-h7ekdfdnh6azedh5.canadacentral-01.azurewebsites.net", port=8000):
         self.client_id = client_id
-        self.server_url = f"ws://{server_host}:{port}/ws/{client_id}"
+        # self.server_url = f"ws://{server_host}:{port}/ws/{client_id}"
+        self.server_url = f"wss://{server_host}/ws/{client_id}"
         self.websocket = None
         self.connected = False
         self.reconnect_delay = 5  # Initial reconnect delay in seconds
@@ -48,6 +50,7 @@ class WebSocketClient:
                 logging.StreamHandler()
             ]
         )
+        # print(f"{log_dir}/client_websocket.log")
 
     def get_last_downloaded_version(self):
         """Retrieve the last downloaded model version from local storage."""
@@ -71,17 +74,15 @@ class WebSocketClient:
     async def connect(self):
         while True:
             try:
-                self.websocket = await websockets.connect(self.server_url)
-                self.connected = True
-                self.reconnect_delay = 5  # Reset delay on successful connection
-                logging.info(f"Connected to server: {self.server_url}")
-                await self.handle_messages()
-            except websockets.exceptions.ConnectionClosed:
-                logging.error("WebSocket connection closed unexpectedly")
-                await self.handle_disconnection()
+                async with websockets.connect(self.server_url) as websocket:
+                    self.websocket = websocket
+                    self.connected = True
+                    self.reconnect_delay = 5
+                    await self.handle_messages()
             except Exception as e:
                 logging.error(f"Connection error: {e}")
                 await self.handle_disconnection()
+
 
     async def handle_disconnection(self):
         self.connected = False
@@ -93,31 +94,22 @@ class WebSocketClient:
         try:
             while True:
                 message = await self.websocket.recv()
-                logging.info(f"Received message: {message}")
-
-                if message.startswith("LATEST_MODEL:"):
-                    server_version = message.split(":")[1]
-                    match = re.search(r'g(\d+)\.keras', server_version)
-                    if match:
-                        server_version_num = int(match.group(1))
-                        logging.info(f"Server version: {server_version_num}, Client version: {self.last_downloaded_version}")
-                        if server_version_num > self.last_downloaded_version:
-                            logging.info(f"Updating to latest model: {server_version}")
-                            await self.retry_update_model(server_version)
-                        else:
-                            logging.info("Client is already up-to-date. No action required.")
-
-                elif message.startswith("NEW_MODEL:"):
-                    filename = message.split(":")[1]
-                    logging.info(f"New global model available: {filename}")
-                    await self.retry_update_model(filename)
-
-        except websockets.exceptions.ConnectionClosed:
-            logging.error("Connection closed while handling messages")
-            self.connected = False
+                if not message:
+                    break
+                    
+                if message.startswith(("LATEST_MODEL:", "NEW_MODEL:")):
+                    print(f"Received message: {message}")
+                    version = message.split(":")[1]
+                    match = re.search(r'g(\d+)\.keras', version)
+                    if match and int(match.group(1)) > self.last_downloaded_version:
+                        await self.retry_update_model(version)
+                else:
+                    print(f"Received message: {message}")
+                        
         except Exception as e:
-            logging.error(f"Error handling messages: {e}")
+            logging.error(f"Message handling error: {e}")
             self.connected = False
+            raise
 
     async def send_status(self):
         """Send periodic status updates to server"""
@@ -165,21 +157,20 @@ class WebSocketClient:
         try:
             model_dir = os.path.join(LOCAL_DOWNLOAD_DIR, self.client_id)
             os.makedirs(model_dir, exist_ok=True)
-            local_file_path = os.path.join(model_dir, filename)
+            local_path = os.path.join(model_dir, filename)
 
             blob_client = BLOB_SERVICE_CLIENT.get_blob_client(
                 container=SERVER_CONTAINER_NAME, 
                 blob=filename
             )
 
-            with open(local_file_path, "wb") as file:
-                download_stream = blob_client.download_blob()
-                file.write(download_stream.readall())
+            async with aiofiles.open(local_path, "wb") as file:
+                data = blob_client.download_blob().readall()
+                await file.write(data)
 
-            logging.info(f"Downloaded model to {local_file_path}")
-            return local_file_path
+            return local_path
         except Exception as e:
-            logging.error(f"Error downloading model: {e}")
+            logging.error(f"Download error: {e}")
             return None
 
 async def run_websocket_service():

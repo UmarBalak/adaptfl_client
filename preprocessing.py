@@ -39,6 +39,8 @@ def preprocess_rgb_images(file, image_size):
     normalized_images = resized_images / 255.0
     return normalized_images
 
+
+
 def preprocess_segmentation_masks(file, image_size):
     """
     Preprocess segmentation masks from a single HDF5 file.
@@ -48,12 +50,33 @@ def preprocess_segmentation_masks(file, image_size):
     resized_masks = np.array([resize(mask, image_size) for mask in seg_data])
     return resized_masks
 
+# def preprocess_controls(file):
+#     """
+#     Preprocess control data from a single HDF5 file.
+#     """
+#     controls = file["controls"][:]
+#     return controls
+
 def preprocess_controls(file):
     """
     Preprocess control data from a single HDF5 file.
+    Normalize throttle, steering, and brake.
     """
     controls = file["controls"][:]
-    return controls
+    throttle = controls[:, 0]  # Assuming throttle is the first column
+    steering = controls[:, 1]  # Assuming steering is the second column
+    brake = controls[:, 2]     # Assuming brake is the third column
+
+    # Normalize throttle and brake to [0, 1] range
+    throttle = np.clip(throttle, 0, 1)
+    brake = np.clip(brake, 0, 1)
+
+    # Normalize steering to [-1, 1] range
+    steering = np.clip(steering, -1, 1)
+
+    return np.column_stack((throttle, steering, brake))
+
+
 
 def preprocess_frames(file):
     """
