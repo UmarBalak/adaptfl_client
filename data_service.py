@@ -8,7 +8,7 @@ from preprocessing import preprocess_client_data
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv(dotenv_path='.env.public')
+load_dotenv(dotenv_path='.env.1')
 
 script_directory = os.path.dirname(os.path.realpath(__file__))
 

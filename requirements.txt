@@ -2,6 +2,7 @@
 tensorflow-privacy
 opencv-python
 scikit-learn
+scikit-image
 
 # API Framework
 fastapi
@@ -15,3 +16,4 @@ azure-storage-blob
 # Utilities
 python-dotenv
 pydantic
+aiofiles

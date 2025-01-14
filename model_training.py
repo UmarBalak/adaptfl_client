@@ -16,7 +16,7 @@ import numpy as np
 from datetime import datetime
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
-load_dotenv(dotenv_path='.env.public')
+load_dotenv(dotenv_path='.env.1')
 
 CLIENT_ACCOUNT_URL = os.getenv("CLIENT_ACCOUNT_URL")
 CLIENT_CONTAINER_NAME = os.getenv("CLIENT_CONTAINER_NAME")
