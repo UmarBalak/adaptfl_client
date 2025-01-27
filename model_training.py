@@ -1,9 +1,9 @@
 import tensorflow as tf
 import warnings
-from tensorflow_privacy.privacy.optimizers import dp_optimizer_keras
+# from tensorflow_privacy.privacy.optimizers import dp_optimizer_keras
 warnings.filterwarnings('ignore', category=UserWarning, module='tensorflow')
 
-import tensorflow_privacy as tfp
+# import tensorflow_privacy as tfp
 tf.get_logger().setLevel('ERROR')
 
 import os
