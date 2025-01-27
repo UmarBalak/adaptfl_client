@@ -29,10 +29,11 @@ except Exception as e:
     raise
     
 class WebSocketClient:
-    def __init__(self, client_id, server_host="adaptfls-h7ekdfdnh6azedh5.canadacentral-01.azurewebsites.net", port=8000):
+    def __init__(self, client_id, server_host, port=8000):
         self.client_id = client_id
         # self.server_url = f"ws://{server_host}:{port}/ws/{client_id}"
         self.server_url = f"wss://{server_host}/ws/{client_id}"
+        print(self.server_url)
         self.websocket = None
         self.connected = False
         self.reconnect_delay = 5  # Initial reconnect delay in seconds

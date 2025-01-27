@@ -8,7 +8,7 @@ from preprocessing import preprocess_client_data
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv(dotenv_path='.env.1')
+load_dotenv(dotenv_path='.env.public')
 
 script_directory = os.path.dirname(os.path.realpath(__file__))
 
@@ -60,7 +60,7 @@ async def run_data_service(client_id):
                 logging.info(f"Found new data: {hdf5_file}")
                 print(f"Found new data: {hdf5_file}")
                 try:
-                    # preprocess_data(hdf5_file, preprocessed_data_path)
+                    preprocess_data(hdf5_file, preprocessed_data_path)
                     train(client_id, preprocessed_data_path, save_dir)
                     # os.remove(hdf5_file)
                     logging.info("Processed file deleted, waiting 4 hours")

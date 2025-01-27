@@ -16,7 +16,7 @@ import numpy as np
 from datetime import datetime
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
-load_dotenv(dotenv_path='.env.1')
+load_dotenv(dotenv_path='.env.public')
 
 CLIENT_ACCOUNT_URL = os.getenv("CLIENT_ACCOUNT_URL")
 CLIENT_CONTAINER_NAME = os.getenv("CLIENT_CONTAINER_NAME")
@@ -101,56 +101,8 @@ def store_results_in_csv(history, csv_file='training_results.csv'):
 
     print(f"Results saved to {csv_file}")
 
-# def train_model(model, data, epochs=1, batch_size=32, learning_rate=0.01, noise_multiplier=1.0, l2_norm_clip=1.0, num_microbatches=1):
-#     """Train the model with differential privacy applied to the optimizer."""
-#     # Start time tracking
-#     start_time = time.time()
 
-#     # Initial resource usage
-#     process = psutil.Process()
-#     initial_memory = process.memory_info().rss / 1024 / 1024  # in MB
-
-#     rgb_data = data["rgb"]
-#     segmentation_data = data["segmentation"]
-#     hlc_data = data["hlc"]
-#     light_data = data["light"]
-#     measurements_data = data["measurements"]
-#     controls_data = data["controls"]  # Target variable
-
-#     # Start model training
-#     print("Training started...")
-#      # Apply DP optimizer
-#     optimizer = dp_optimizer_keras.DPKerasSGDOptimizer(
-#     l2_norm_clip=l2_norm_clip,
-#     noise_multiplier=noise_multiplier,
-#     num_microbatches=num_microbatches,
-#     learning_rate=learning_rate)
-
-#     model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
-#     history = model.fit(
-#         [rgb_data, segmentation_data, hlc_data, light_data, measurements_data],  # Inputs
-#         controls_data,  # Target (throttle, steer, brake)
-#         epochs=epochs,
-#         batch_size=batch_size,
-#         verbose=1
-#     )
-#     store_results_in_csv(history)
-
-#     # End time tracking
-#     end_time = time.time()
-#     training_time = end_time - start_time
-
-#     # Resource usage after training
-#     final_memory = process.memory_info().rss / 1024 / 1024  # in MB
-
-#     # Print resource usage statistics
-#     print(f"Training time: {training_time:.2f} seconds")
-#     print(f"Initial Memory usage: {initial_memory:.2f} MB")
-#     print(f"Final Memory usage: {final_memory:.2f} MB")
-
-#     return history
-
-def train_model(model, data, epochs, batch_size, learning_rate, noise_multiplier, l2_norm_clip, num_microbatches):
+def train_model(model, data, epochs, batch_size, learning_rate):
     """Train the model with differential privacy applied to the optimizer."""
     # Start time tracking
     start_time = time.time()
@@ -205,12 +157,6 @@ def train_model(model, data, epochs, batch_size, learning_rate, noise_multiplier
     ]
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=initial_lr)
-    # Apply DP optimizer
-    # optimizer = dp_optimizer_keras.DPKerasSGDOptimizer(
-    # l2_norm_clip=l2_norm_clip,
-    # noise_multiplier=noise_multiplier,
-    # num_microbatches=num_microbatches,
-    # learning_rate=initial_lr)
     
     model.compile(
         optimizer=optimizer,
@@ -224,7 +170,7 @@ def train_model(model, data, epochs, batch_size, learning_rate, noise_multiplier
         epochs=epochs,
         batch_size=batch_size,
         validation_split=0.2,
-        verbose=1,
+        verbose=2,
         callbacks=callbacks
     )
     store_results_in_csv(history)
@@ -323,30 +269,91 @@ def upload_file(file_path, container_name, metadata):
 
 def load_model_weights(model, directory_path):
     """
-    Load the first .keras weights file found in the specified directory
-    
+    Load the first .keras weights file found in the specified directory.
+
     Args:
-        model: Keras model instance
-        directory_path: Path to directory containing weights file
-        
+        model: Keras model instance.
+        directory_path: Path to directory containing weights file.
+
     Returns:
-        bool: True if weights loaded successfully, False otherwise
+        bool: True if weights loaded successfully, False otherwise.
     """
     try:
-        # Find all .keras files in directory
-        keras_files = glob.glob(os.path.join(directory_path, "weights.keras"))
+        # Search for .keras files in the directory
+        keras_file = next((file for file in glob.glob(os.path.join(directory_path, "weights.keras"))), None)
         
-        if not keras_files:
-            logging.error(f"No .keras files found in {directory_path}")
-            return False
+        if keras_file:
+            model.load_weights(keras_file)
+            logging.info(f"Successfully loaded weights from {keras_file}")
+            return True
+        
+        logging.error(f"No .keras files found in {directory_path}")
+        return False
 
-        logging.info(f"Successfully loaded weights from {keras_files[0]}")
-        return True
-        
     except Exception as e:
         logging.error(f"Error loading weights: {str(e)}")
         return False
 
+def add_laplace_noise(weights, epsilon, sensitivity):
+    """Adds Laplace noise to the model weights for differential privacy."""
+    noise = np.random.laplace(0, sensitivity / epsilon, size=weights.shape)
+    return weights + noise
+
+def save_weights_with_dp(model, weights_path, epsilon=0.1, sensitivity=1.0):
+    """Saves the model weights with added differential privacy noise."""
+    # Get the model weights
+    weights = model.get_weights()
+    
+    # Add Laplace noise to each layer's weights
+    perturbed_weights = []
+    for weight in weights:
+        perturbed_weights.append(add_laplace_noise(weight, epsilon, sensitivity))
+    
+    # Set the model weights to the perturbed weights
+    model.set_weights(perturbed_weights)
+    
+    # Save the perturbed weights to the specified file
+    model.save_weights(weights_path)
+    print(f"Weights saved with DP noise to {weights_path}")
+
+def add_laplace_noise_to_weights(weights, epsilon, sensitivity):
+    """
+    Add Laplace noise to model weights for differential privacy.
+    - weights: model weights to perturb.
+    - epsilon: privacy budget.
+    - sensitivity: sensitivity of the weights.
+    """
+    noise = np.random.laplace(0, sensitivity / epsilon, size=weights.shape)
+    return weights + noise
+def save_weights_with_dp(client_id, model, save_dir, epsilon, sensitivity):
+    """
+    Save model weights with versioning and added DP noise.
+    - epsilon: privacy budget.
+    - sensitivity: sensitivity of the weights.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Get versioned filename
+    weights_path, next_version, timestamp = get_versioned_filename(client_id, save_dir)
+
+    try:
+        # Get model weights and add DP noise
+        model_weights = model.get_weights()
+        noisy_weights = [add_laplace_noise_to_weights(w, epsilon, sensitivity) for w in model_weights]
+
+        # Set noisy weights back to the model
+        model.set_weights(noisy_weights)
+
+        # Save noisy weights to the specified path
+        model.save_weights(weights_path)
+
+        model.save_weights(os.path.join(save_dir, "weights.keras"))
+
+        logging.info(f"Weights for {client_id} saved at {weights_path}")
+    except Exception as e:
+        logging.error(f"Failed to save weights for {client_id}: {e}")
+
+    return weights_path, timestamp
 
 # Updated Main Function to Reflect Unified Versioning
 def main(client_id, data_path, save_dir, build_model):
@@ -374,27 +381,20 @@ def main(client_id, data_path, save_dir, build_model):
 
         # Build and train the model
         model = build_model(input_shapes)
-        success = load_model_weights(model, save_dir)
-        if not success:
-            logging.info("Failed to load weights. Training from scratch.")
-            print("Failed to load weights. Training from scratch.")
-        else:
+
+        if load_model_weights(model, save_dir):
             logging.info("Weights loaded successfully.")
             print("Weights loaded successfully.")
-        logging.info("Model created successfully.")
-        print("model created successfully")
+        else:
+            logging.info("Failed to load weights. Training from scratch.")
+            print("Failed to load weights. Training from scratch.")
 
         epochs = 30
         batch_size = 32
         learning_rate = 0.001
-        noise_multiplier = 0.1  # Increase noise multiplier to ensure privacy
-        l2_norm_clip = 0.1  # Control how much noise is added
-        num_microbatches = 1 # Split the batch into smaller groups
-        print(f"noise_multiplier: {noise_multiplier}, l2_norm_clip: {l2_norm_clip}")
+
         history = train_model(model, data, epochs=epochs, batch_size=batch_size, 
-                    learning_rate=learning_rate, 
-                    noise_multiplier=noise_multiplier, 
-                    l2_norm_clip=l2_norm_clip, num_microbatches=num_microbatches)
+                    learning_rate=learning_rate)
         
         try:
             final_loss = history.history['loss'][-1]
@@ -408,11 +408,23 @@ def main(client_id, data_path, save_dir, build_model):
             'num_examples': str(num_examples),
             'loss': str(final_loss),
         }
-
-        # Save and upload weights
+        
+        # Save weights
         model.save_weights(os.path.join(save_dir, "weights.keras"))
         weights_path, timestamp = save_weights(client_id, model, save_dir)
+
+
+        # save weights with dp
+        # epsilon = 0.5  # Privacy budget (0.1 == 0.5 inc in loss, lower value == high noise)
+        # sensitivity = 1.0  # Sensitivity of the weights
+        # weights_path, timestamp = save_weights_with_dp(client_id, model, save_dir, epsilon, sensitivity)
+        
+
+
+        # upload weights to blob
         upload_file(weights_path, CLIENT_CONTAINER_NAME, metadata)
+
+
 
         # Save and upload the full model
         # model_path = save_model(client_id, model, save_dir)
