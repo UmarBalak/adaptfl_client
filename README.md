@@ -1,8 +1,11 @@
 # AdaptFL Client (Edge Device)
 
-## Overview
-
 The **AdaptFL Client** runs on edge devices, performing local training and communicating with the server to update model weights. It listens for model updates via WebSockets and downloads new weights from Azure Blob Storage when notified.
+
+#### AdaptFL Server (FastAPI)
+
+🔗 [Go to AdaptFL Server Repository](https://github.com/UmarBalak/adaptfl_server)
+
 
 ## Features
 
@@ -38,11 +41,6 @@ Clients must be configured with:
 - `Azure Blob credentials`
 
 <br>
-
-# AdaptFL Server (FastAPI)
-
-🔗 [Go to AdaptFL Server Repository](https://github.com/UmarBalak/adaptfl_server)
-
 
 ## Overview
 
